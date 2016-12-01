@@ -1,6 +1,6 @@
 {
   "name": "micodec",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A picture is worth a thousand words... Literally! Encoding and transfer data through images",
   "main": "MICodec.js",
   "scripts": {
