@@ -1,6 +1,6 @@
 {
   "name": "micodec",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A picture is worth a thousand words... Literally! Encoding and transfer data through images",
   "main": "MICodec.js",
   "scripts": {
@@ -16,14 +16,15 @@
     "images",
     "image",
     "digital",
-    "art"
+    "art",
+	"steganography"
   ],
   "author": "Daniel Monza",
   "license": "GPL-3.0",
   "bugs": {
     "url": "https://github.com/dmonza/MICodec/issues"
   },
-  "homepage": "https://github.com/dmonza/MICodec#readme",
+  "homepage": "http://pixelcodec.com",
   "dependencies": {
     "compression": "^1.6.1",
     "pngjs": "^3.0.0",
