@@ -1,9 +1,22 @@
 {
   "name": "micodec",
-  "version": "1.0.2",
+  "version": "2.0.0",
   "description": "A picture is worth a thousand words... Literally! Encoding and transfer data through images",
   "main": "MICodec.js",
+  "files": [
+    "MICodec.js",
+    "MIEncode.js",
+    "MIDecode.js",
+    "File.js",
+    "container.js",
+    "codecs/",
+    "baseimage.png"
+  ],
+  "engines": {
+    "node": ">=14.19.0"
+  },
   "scripts": {
+    "cli": "node bin/micodec.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -26,8 +39,6 @@
   },
   "homepage": "http://pixelcodec.com",
   "dependencies": {
-    "compression": "^1.6.1",
-    "pngjs": "^3.0.0",
-    "temp": "^0.8.3"
+    "pngjs": "^7.0.0"
   }
 }

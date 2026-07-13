@@ -1,6 +1,7 @@
 "use strict";
 
 const File = require('./File');
+const container = require('./container');
 const PNG = require('pngjs').PNG;
 const fs = require('fs');
 const path = require('path');
@@ -17,31 +18,44 @@ function PixerEncode(){
 }
 
 PixerEncode.prototype.fileToImage = function( fileIn, fileTo, orgName, cb ){
-		this.currentChar = 0;
-		this.fileIn = fileIn;
-		this.fileTo = fileTo;
+		const nombre = orgName || path.basename( fileIn );
 
-		this.name = orgName;
+		File.gzipFile( fileIn, (err, payload) => {
+			if (err) return cb && cb(err);
 
-		let f = new File(1);
-		f.fromDisk( this.fileIn, orgName, (err, buff) => {
-			this.buffer = buff;
-			this.processData(cb);
-
+			// La imagen queda auto-descripta: dice que la generó "pixel" v1.
+			const prelude = container.build( nombre, "pixel", 1 );
+			this.bytesToImage( prelude, payload, fileTo, cb );
 		} );
 }
 
+// Nivel de bytes: el prólogo va crudo al principio, y después el payload gzip
+// codificado. Es el punto de entrada que usa el registry de códecs.
+PixerEncode.prototype.bytesToImage = function( prelude, payload, fileTo, cb ){
+		this.currentChar = 0;
+		this.prelude = prelude;
+		this.preludeLen = prelude.length;
+		this.buffer = payload;
+		this.fileTo = fileTo;
+
+		this.processData(cb);
+}
+
 PixerEncode.prototype.processData = function( cb ){
-	let pixels  = Math.ceil(( this.buffer.length+256)/bpp); // (3 pixel por letra) + diccionario
+	// Layout de byte-slots:  [prólogo crudo][tabla de sustitución (256)][payload gzip]
+	let totalSlots = this.preludeLen + 256 + this.buffer.length;
+	let pixels  = Math.ceil( totalSlots / bpp );
 
 	this.width  = Math.ceil(Math.pow(pixels/ratio, 1/2));
 	this.height = Math.ceil(ratio * this.width);
 
 	// Image data array
-	// this.data = [];
-	this.data = new Uint8Array(this.width*this.height*4);
+	// Buffer (no Uint8Array): es lo que espera el packer de pngjs. Buffer extiende
+	// Uint8Array, así que las escrituras por índice son idénticas, y viene en cero.
+	this.data = Buffer.alloc(this.width*this.height*4);
 
-	this.wmark = new WaterMark( "baseimage.png", this.width, this.height);
+	// __dirname, no el cwd: el asset viaja con el módulo, no con quien lo usa.
+	this.wmark = new WaterMark( path.join(__dirname, "baseimage.png"), this.width, this.height);
 
 	this.buildMapping();
 
@@ -89,12 +103,7 @@ PixerEncode.prototype.setPixelInfo = function( x, y, channel){
 				this.data[idx+3] = 255; // alpha
 		}
 
-		let realChar = this.nextChar();
-
-		let charCode = 0;
-		// Map char
-		if (realChar>0)
-			charCode = this.table[realChar];
+		let charCode = this.nextChar();
 
 		// Ajuste de inversión de pixel
 		let invertir = false;
@@ -115,24 +124,28 @@ PixerEncode.prototype.setPixelInfo = function( x, y, channel){
 		this.data[idx+channel] = charCode;
 
 		if (debug)
-			console.log(`${realChar};${x},${y},${channel},${idx},${this.data[idx+bpp]};${charCode}`);
+			console.log(`${x},${y},${channel},${idx},${this.data[idx+bpp]};${charCode}`);
 }
 
+// Devuelve el byte que va en el slot actual, YA sustituido (salvo en el prólogo).
+// El corte de las regiones es relativo al prólogo, no a un 256 fijo.
 PixerEncode.prototype.nextChar = function(){
-	// currentChar - Current byte to write
-	let realChar = 0;
+	const slot = this.currentChar++;
 
-	// Si es menor a 255, se escribe el mapeo al inicio de la imagen
-	if (this.currentChar<=255){
-		// table[65] = 2 // 65 = A, 2 es el random number
-		if (this.table[this.currentChar])
-			realChar = this.currentChar;
-	}else{
-		realChar = this.buffer[ this.currentChar-256 ];
-	}
+	// Prólogo: byte crudo, sin tabla de sustitución. Tiene que poder leerse sin
+	// conocer el códec — es lo que dice CUÁL es el códec.
+	if (slot < this.preludeLen)
+		return this.prelude[slot];
 
-	this.currentChar++;
-	return realChar;
+	const d = slot - this.preludeLen;
+
+	// Diccionario: en el slot d se escribe table[d], el sustituto random de d.
+	if (d <= 255)
+		return this.table[d] ? this.table[d] : 0;
+
+	// Payload. Más allá del final, undefined -> 0 (relleno de la imagen).
+	const realChar = this.buffer[ d - 256 ];
+	return (realChar > 0) ? this.table[realChar] : 0;
 }
 
 PixerEncode.prototype.buildMapping = function(){
@@ -182,9 +195,8 @@ function WaterMark(file, w, h){
 		this.width = w;
 		this.height = h;
 
-		let data = fs.readFileSync("baseimage.png");
+		let data = fs.readFileSync(file);
 		this.image = PNG.sync.read(data);
-		let buff = PNG.sync.write(this.image);
 }
 
 WaterMark.prototype.getPixel = function(_x,_y){

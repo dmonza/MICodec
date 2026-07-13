@@ -19,9 +19,10 @@ File.prototype.fromDisk = function( fileIn, orgName, cb){
 	else
 		this.name = path.basename( fileIn );
 
-	// console.log(this.name + this.name.length);
-	if (this.name.length > 256)
-		throw "Maximun file length is 256 chars";
+	// El largo del nombre viaja en un solo byte, y se escribe en UTF-8:
+	// el límite es 255 bytes, no 256 caracteres.
+	if (Buffer.byteLength(this.name, "utf8") > 255)
+		throw new Error("Filename must be at most 255 bytes (UTF-8)");
 
 
 	fs.readFile( fileIn, ( err, _buffer) => {
@@ -38,10 +39,10 @@ File.prototype.fromDisk = function( fileIn, orgName, cb){
 
 File.prototype.toBytes = function(){
 	let i;
-	let bufferName = new Buffer( this.name, "utf8");
+	let bufferName = Buffer.from( this.name, "utf8");
 
 	let total = 2 + bufferName.length + this.fileBuffer.length; // 1 version, 1 fnamesize, filename, filedata
-	let buffer = new Buffer(total);
+	let buffer = Buffer.alloc(total);
 
 	buffer[0] = this.version;
 	buffer[1] = bufferName.length;
@@ -57,39 +58,65 @@ File.prototype.toBytes = function(){
 
 
 File.prototype.toDisk = function(buffer, fileOut, cb){
+	let frame;
 	try{
-		this.version = buffer[0];
-
-		// Control de versión
-		if (this.version > 1)
-			return cb("Not a valid MICodec file. Take care to don't use applications like hangout, whatsapp to transfer it, they modify de image.");
-
-		this.name = buffer.toString( "utf8", 2, buffer[1]+2);
-
-		this.fileBuffer = new Buffer( buffer.length-2-buffer[1] );
-
-		buffer.copy( this.fileBuffer, 0, 2+buffer[1]);
-
-		console.log(`Version: ${this.version} Name:${this.name}` );
-
-		zlib.gunzip( this.fileBuffer, {level: 9}, (err, cbuffer) => {
-			try{
-				fs.writeFileSync( fileOut, cbuffer);
-				// return filename at finish
-				cb(undefined, this.name );
-			}catch(ex){
-				cb(ex);
-			}
-		});
+		frame = File.parseFrame( buffer );
 	}catch(ex){
-		cb( ex );
+		return cb( ex.message );
 	}
+
+	this.version = 1;
+	this.name = frame.name;
+
+	File.writeGunzip( frame.payload, fileOut, (err) => {
+		if (err) return cb(err);
+		cb( undefined, this.name );     // se devuelve el nombre al terminar
+	} );
+}
+
+// --- Framing (solo formato legacy) -----------------------------------------
+//
+// Las imágenes nuevas NO llevan frame: el nombre viaja en el prólogo (container.js) y
+// la región codificada tiene solo el gzip. Esto queda para leer las imágenes viejas.
+File.parseFrame = function( bytes ){
+	const version = bytes[0];
+	if (version !== 1)
+		throw new Error("Not a valid MICodec file. Take care to don't use applications like hangout, whatsapp to transfer it, they modify de image.");
+
+	const nameLen = bytes[1];
+	return {
+		name:    bytes.toString( "utf8", 2, 2 + nameLen ),
+		payload: bytes.subarray( 2 + nameLen ),
+	};
+}
+
+// --- gzip, sin framing -----------------------------------------------------
+//
+// El camino nuevo solo necesita comprimir/descomprimir: el nombre ya está en el prólogo.
+
+File.gzipFile = function( fileIn, cb ){
+	fs.readFile( fileIn, (err, buffer) => {
+		if (err) return cb(err);
+		zlib.gzip( buffer, { level: 9 }, cb );
+	} );
+}
+
+File.writeGunzip = function( payload, fileOut, cb ){
+	zlib.gunzip( payload, (err, out) => {
+		if (err) return cb(err);
+		try{
+			fs.writeFileSync( fileOut, out );
+			cb();
+		}catch(ex){
+			cb(ex);
+		}
+	} );
 }
 
 // Funcniones auxiliares
 function fileExists(fileIn){
 	try {
-   	fs.accessSync( fileIn, fs.F_OK);
+   	fs.accessSync( fileIn, fs.constants.F_OK);
 		return true;
 	} catch (e) {
 		return false;

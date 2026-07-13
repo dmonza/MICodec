@@ -12,46 +12,35 @@ module.exports = PixerDecode;
 function PixerDecode(){
 }
 
+// API pública de siempre. Ahora despacha por el header de la imagen: si trae prólogo,
+// lo usa; si no, cae al códec legacy. El require es perezoso a propósito, para no armar
+// un ciclo de módulos (codecs/pixel.js requiere este archivo).
 PixerDecode.prototype.imageToFile = function( imageFile, fileTo, cb ){
-	fs.readFile( imageFile, (err, buff) => {
-		try{
-			let image = PNG.sync.read(buff);
-			this.data = image.data;
-			this.width  = image.width;
-			this.height = image.height;
-			console.log(`w: ${this.width} h: ${this.height}`);
-
-			// ahora tenemos la estructura data de forma correcta
-			this.imgDecode();
-
-			// Return fixed buffer
-			let i;
-			let lastByte = this.buffer.length-1;
-
-			// busca el último byte > 0
-			for (i = (this.buffer.length-1); this.buffer[i]===0; i--) {
-				lastByte = i;
-			}
-			console.log(`Totalbytes: ${this.buffer.length} LastByte: ${lastByte}`)
-
-			let newBuffer = new Buffer(lastByte); // new Uint8Array(lastByte);
-			for (i = 0; i < lastByte; i++) {
-				 newBuffer[i] = this.buffer[i];
-			}
-
-			let f = new File(1);
-			f.toDisk( newBuffer, fileTo, cb);
-		}catch(ex){
-			console.log(ex);
-			cb("Not a valid MICodec file. Take care to don't use applications like hangout, whatsapp to transfer it, they modify de image.");
-		}
-	} );
+	require('./codecs').decodeFile( imageFile, fileTo, cb );
 }
 
-PixerDecode.prototype.imgDecode = function(){
+// Saca de la imagen los bytes de la región codificada, salteando el prólogo.
+// `preludeLen` es 0 para las imágenes legacy (no tienen prólogo).
+PixerDecode.prototype.decodeImage = function( image, preludeLen ){
+	this.data   = image.data;
+	this.width  = image.width;
+	this.height = image.height;
+
+	this.imgDecode( preludeLen );
+
+	// Los píxeles sobrantes de la imagen llegan acá como ceros al final.
+	// No se recortan: un stream gzip se autodelimita, así que gunzip ignora todo lo
+	// que venga después del trailer. Recortarlos era justamente el bug: el trailer
+	// ISIZE del gzip termina en 0x00 para todo archivo < 16MB, y el recorte se lo
+	// comía junto con el padding, dejando el stream truncado.
+	return Buffer.from( this.buffer );
+}
+
+PixerDecode.prototype.imgDecode = function( preludeLen ){
 	this.table = {};
 	this.byteidx = 0;
 	this.buffer = [];
+	this.preludeLen = preludeLen || 0;
 
 	for (let y = 0; y < this.height; y++) {
 		for (let x = 0; x < this.width; x++) {
@@ -74,19 +63,18 @@ PixerDecode.prototype.getPixelInfo = function( x , y, channel){
 	if (isColored) // para imágenes con fondo donde alpha
 		charCode = 255 - charCode;
 
-	let realChar = 0;
+	const slot = this.byteidx++;
 
-	if (this.byteidx<=255){
-		this.table[this.byteidx] = charCode;
-		if (charCode>0){
-			realChar = this.byteidx;
-		}
-	}else{
-		realChar = this.getChar(charCode);
-		this.buffer.push(realChar);
-	}
+	// Prólogo: ya lo leyó container.js antes de elegir el códec. Acá se saltea.
+	if (slot < this.preludeLen)
+		return;
 
-	this.byteidx++;
+	const d = slot - this.preludeLen;
+
+	if (d <= 255)
+		this.table[d] = charCode;           // diccionario
+	else
+		this.buffer.push( this.getChar(charCode) );
 }
 
 PixerDecode.prototype.isColoredByChannel = function(channel, alpha){
